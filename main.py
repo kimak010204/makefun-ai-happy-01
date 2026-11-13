@@ -1,40 +1,85 @@
-"""ai-happy-01 entry: copy the bundled image to /output/entry.png.
+"""Salin image.png ke lokasi output sebagai entry.png.
 
-Deterministic, offline, standard library only. The image (image.png
-beside this file) is copied byte-for-byte to the output path, and the
-copy is verified to match the source exactly. No randomness, no clock,
-no network: two runs always produce identical bytes.
+Program ini mengambil gambar PNG yang ada di samping skrip ini dan
+menyalinnya byte demi byte ke direktori output, lalu memverifikasi
+bahwa hasil salinan identik dengan sumbernya.
+
+Perilaku:
+- Direktori output diambil dari environment variable
+  MAKEFUN_OUTPUT_DIR; bila tidak diset, dipakai /output.
+  Nama file hasil selalu entry.png, dan direktori output dibuat
+  bila belum ada.
+- Sebelum menyalin, sumber divalidasi: file harus ada, ukuran
+  maksimal 1 MiB, dan 8 byte awal harus cocok dengan magic
+  bytes format PNG.
+- Setelah menyalin, isi hasil dibandingkan byte demi byte dengan
+  sumber; bila berbeda, program gagal.
+- Setiap kegagalan mencetak pesan error yang deskriptif ke stderr
+  dan keluar dengan kode non-zero.
+
+Hanya memakai Python 3 stdlib; tanpa network, random, atau
+timestamp.
 """
 
 import os
 import shutil
+import sys
 
-OUTPUT_DIR = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-OUTPUT_PATH = os.path.join(OUTPUT_DIR, "entry.png")
-SOURCE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.png")
-
-
-MAX_BYTES = 1_048_576
+MAX_SIZE = 1048576  # 1 MiB
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def main() -> None:
-    if not os.path.isfile(SOURCE_PATH):
-        raise SystemExit(f"missing source image: {SOURCE_PATH}")
-    size = os.path.getsize(SOURCE_PATH)
-    if size > MAX_BYTES:
-        raise SystemExit(f"source image too large: {size} bytes (max {MAX_BYTES})")
-    with open(SOURCE_PATH, "rb") as fh:
-        if fh.read(len(PNG_MAGIC)) != PNG_MAGIC:
-            raise SystemExit("source image is not a PNG file")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+def main():
+    # Lokasi skrip ini; gambar sumber ada di direktori yang sama.
+    here = os.path.dirname(os.path.abspath(__file__))
+    source = os.path.join(here, "image.png")
+
+    # Guard: file sumber harus ada.
+    if not os.path.isfile(source):
+        print(f"Error: file sumber tidak ditemukan: {source}", file=sys.stderr)
+        sys.exit(1)
+
+    # Guard: ukuran maksimal 1 MiB.
+    size = os.path.getsize(source)
+    if size > MAX_SIZE:
+        print(
+            f"Error: ukuran image.png {size} byte melebihi batas {MAX_SIZE} byte",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Guard: 8 byte awal harus cocok dengan magic bytes PNG.
+    with open(source, "rb") as f:
+        header = f.read(8)
+    if header != PNG_MAGIC:
+        print("Error: image.png bukan file PNG yang valid (magic bytes tidak cocok)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
+    os.makedirs(out_dir, exist_ok=True)
+    dest = os.path.join(out_dir, "entry.png")
+
     try:
-        shutil.copyfile(SOURCE_PATH, OUTPUT_PATH)
+        shutil.copyfile(source, dest)
     except OSError as exc:
-        raise SystemExit(f"failed to write {OUTPUT_PATH}: {exc}") from exc
-    # Verify the copy is byte-identical to the source before exiting.
-    if os.path.getsize(OUTPUT_PATH) != size:
-        raise SystemExit("output size does not match source image")
+        print(f"Error: gagal menyalin {source} ke {dest}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Verifikasi pasca-copy: hasil harus byte-identik dengan sumber.
+    try:
+        with open(source, "rb") as f_src, open(dest, "rb") as f_dst:
+            if f_src.read() != f_dst.read():
+                print(
+                    f"Error: hasil salinan {dest} tidak identik dengan sumber {source}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+    except OSError as exc:
+        print(f"Error: gagal memverifikasi hasil salinan {dest}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Disalin: {source} -> {dest} ({size} byte, terverifikasi identik)")
 
 
 if __name__ == "__main__":
